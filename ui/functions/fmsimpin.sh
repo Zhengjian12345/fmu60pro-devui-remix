@@ -1,5 +1,5 @@
 #!/bin/sh
-# fmsimpin.sh - 飞猫分身切卡 v5.2.4
+# fmsimpin.sh - 飞猫分身切卡 v5.2.5
 
 CMD="$1"
 PIN_NUM_M="$2"
@@ -7,7 +7,6 @@ TIMEOUT="${3:-30}"
 
 LOG="/tmp/devui-fmswitch-action.log"
 PIDFILE="/tmp/fmswitch.pid"
-ADMIN_PASS="qaz123456"
 
 log() {
     stamp=$(date '+%F %T')
