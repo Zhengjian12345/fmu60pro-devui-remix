@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>双卡流量</title>
+</head>
+<body>
+  <div class="card">
+    <div class="title">双卡流量 <span class="r muted">手动基准 · 自动扣减</span></div>
+    <p class="func-note">展示两张 SIM 的今日/本月用量与剩余额度。剩余值可通过外部 collector 或手动基准维护。</p>
+  </div>
+
+  <div class="card">
+    <div class="title">插拔卡 · SIM1 <span class="r {{SIM1USECLASS}}">{{SIM1USE}}</span></div>
+    <table>
+      <tr><td class="kv-l">运营商</td><td class="val">{{SIM1OP}}</td></tr>
+      <tr><td class="kv-l">今日用量</td><td class="val">{{SIM1DAY}}</td></tr>
+      <tr><td class="kv-l">本月已用</td><td class="val">{{SIM1USED}}</td></tr>
+      <tr><td class="kv-l">本月剩余</td><td class="val">{{SIM1LEFT}}</td></tr>
+      <tr><td class="kv-l">重置日期</td><td class="val">{{SIM1RESET}}</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="title">内置卡 · SIM2 <span class="r {{SIM2USECLASS}}">{{SIM2USE}}</span></div>
+    <table>
+      <tr><td class="kv-l">运营商</td><td class="val">{{SIM2OP}}</td></tr>
+      <tr><td class="kv-l">今日用量</td><td class="val">{{SIM2DAY}}</td></tr>
+      <tr><td class="kv-l">本月已用</td><td class="val">{{SIM2USED}}</td></tr>
+      <tr><td class="kv-l">本月剩余</td><td class="val">{{SIM2LEFT}}</td></tr>
+      <tr><td class="kv-l">重置日期</td><td class="val">{{SIM2RESET}}</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="title">数据源</div>
+    <table>
+      <tr><td class="kv-l">当前数据卡</td><td class="val">{{SIMCURRENT}}</td></tr>
+      <tr><td class="kv-l">采集器</td><td class="val">{{SIMTRAFFICSRC}}</td></tr>
+    </table>
+    <p class="func-note">可选安装 `/data/plugins/dual-sim-traffic/collector.lua` 做实时累计；未安装时显示基础 SIM 状态与占位流量。</p>
+  </div>
+</body>
+</html>
