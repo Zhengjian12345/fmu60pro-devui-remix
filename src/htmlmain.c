@@ -6189,20 +6189,50 @@ static int build_kv(struct kv *t, const char *path)
 	t[i++] = (struct kv){ "FMTOAST", s_fm_toast };
 	    t[i++] = (struct kv){ "FMLOG", s_fm_log };
 
-    /* ---- traffic plugin tokens ---- */
+    /* ---- traffic plugin tokens (inline, no global vars) ---- */
+    char tr_day_rx[24] = "-", tr_day_tx[24] = "-";
+    char tr_mon_rx[24] = "-", tr_mon_tx[24] = "-";
+    char tr_limit[24] = "不限";
+    int tr_pct = 0, tr_alert = 0;
+
+    if (access(TRAFFIC_CTL, R_OK) == 0) {
+        FILE *fp = popen("sh " TRAFFIC_CTL " status 2>/dev/null", "r");
+        if (fp) {
+            char line[512];
+            while (fgets(line, sizeof(line), fp)) {
+                char *eq = strchr(line, '=');
+                if (!eq) continue;
+                *eq = '\0';
+                char *val = eq + 1;
+                size_t vlen = strlen(val);
+                if (vlen > 0 && val[vlen - 1] == '\n')
+                    val[vlen - 1] = '\0';
+
+                if      (!strcmp(line, "TR_DAY_RX"))  snprintf(tr_day_rx, sizeof(tr_day_rx), "%s", val);
+                else if (!strcmp(line, "TR_DAY_TX"))  snprintf(tr_day_tx, sizeof(tr_day_tx), "%s", val);
+                else if (!strcmp(line, "TR_MON_RX"))  snprintf(tr_mon_rx, sizeof(tr_mon_rx), "%s", val);
+                else if (!strcmp(line, "TR_MON_TX"))  snprintf(tr_mon_tx, sizeof(tr_mon_tx), "%s", val);
+                else if (!strcmp(line, "TR_LIMIT"))   snprintf(tr_limit, sizeof(tr_limit), "%s", val);
+                else if (!strcmp(line, "TR_PCT"))     tr_pct = atoi(val);
+                else if (!strcmp(line, "TR_ALERT"))   tr_alert = atoi(val);
+            }
+            pclose(fp);
+        }
+    }
+
     static char s_tr_day_rx[24], s_tr_day_tx[24], s_tr_mon_rx[24], s_tr_mon_tx[24];
     static char s_tr_limit[24], s_tr_pct[8], s_tr_alert_cls[16];
     static char s_tr_alert_state[16], s_tr_action_log[2200];
 
-    snprintf(s_tr_day_rx, sizeof s_tr_day_rx, "%s", g_tr_day_rx);
-    snprintf(s_tr_day_tx, sizeof s_tr_day_tx, "%s", g_tr_day_tx);
-    snprintf(s_tr_mon_rx, sizeof s_tr_mon_rx, "%s", g_tr_mon_rx);
-    snprintf(s_tr_mon_tx, sizeof s_tr_mon_tx, "%s", g_tr_mon_tx);
-    snprintf(s_tr_limit, sizeof s_tr_limit, "%s", g_tr_limit);
-    snprintf(s_tr_pct, sizeof s_tr_pct, "%d%%", g_tr_pct);
-    snprintf(s_tr_alert_cls, sizeof s_tr_alert_cls, "%s", g_tr_alert ? "on" : "off");
-    snprintf(s_tr_alert_state, sizeof s_tr_alert_state, "%s", g_tr_alert ? "已开启" : "已关闭");
-    plugin_action_log_html(s_tr_action_log, sizeof s_tr_action_log, TRAFFIC_ACTION_LOG);
+    snprintf(s_tr_day_rx, sizeof(s_tr_day_rx), "%s", tr_day_rx);
+    snprintf(s_tr_day_tx, sizeof(s_tr_day_tx), "%s", tr_day_tx);
+    snprintf(s_tr_mon_rx, sizeof(s_tr_mon_rx), "%s", tr_mon_rx);
+    snprintf(s_tr_mon_tx, sizeof(s_tr_mon_tx), "%s", tr_mon_tx);
+    snprintf(s_tr_limit, sizeof(s_tr_limit), "%s", tr_limit);
+    snprintf(s_tr_pct, sizeof(s_tr_pct), "%d%%", tr_pct);
+    snprintf(s_tr_alert_cls, sizeof(s_tr_alert_cls), "%s", tr_alert ? "on" : "off");
+    snprintf(s_tr_alert_state, sizeof(s_tr_alert_state), "%s", tr_alert ? "已开启" : "已关闭");
+    plugin_action_log_html(s_tr_action_log, sizeof(s_tr_action_log), TRAFFIC_ACTION_LOG);
 
     t[i++] = (struct kv){ "TRDAYRX", s_tr_day_rx };
     t[i++] = (struct kv){ "TRDAYTX", s_tr_day_tx };
