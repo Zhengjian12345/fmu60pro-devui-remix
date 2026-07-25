@@ -15,7 +15,6 @@
 #include "key_input.h"
 #include "backlight.h"
 #include "devui_ext.h"
-
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <limits.h>
@@ -107,12 +106,20 @@ static uint32_t monotonic_seconds(void)
 #define CPU_CTL_LEGACY  UI_DIR "/../cpuctl.sh"
 #define CPU_CTL_OLD     "/data/ufi-tools/u60pro-devui/cpuctl.sh"
 #define CPU_ACTION_LOG "/tmp/devui-cpu-action.log"
-#define FMSIMPIN_ACTION_LOG "/tmp/devui-fmsimpin-action.log"
+#define FMSWITCH_ACTION_LOG "/tmp/devui-fmswitch-action.log"
+#define TRAFFIC_CTL UI_DIR "/functions/trafficctl.sh"
+#define TRAFFIC_ACTION_LOG "/tmp/devui-traffic-action.log"
 
 struct plugin_candidate {
     const char *dir;
     const char *ctl;
     const char *bin;
+};
+
+static const struct plugin_candidate g_fm_candidates[] = {
+    { "/data/plugins/u60pro-devui/ui/functions/", "/data/plugins/u60pro-devui/ui/functions/fmsimpin.sh", NULL },
+    { "/data/ufi-tools", "/data/ufi-tools/fmsimpin.sh", NULL },
+    { "/data/kano_plugins", "/data/kano_plugins/fmsimpin.sh", NULL },
 };
 
 static const struct plugin_candidate g_ts_candidates[] = {
@@ -214,8 +221,20 @@ static char g_op_rat_pref[16] = "auto", g_op_failure_policy[24] = "stay_offline"
 static char g_op_selected[8];
 static uint32_t g_op_confirm_until;
 static struct operator_candidate_state g_op_scan[OP_MAX_CANDIDATES];
-
-static int g_fmsimpin_available = -1;  /* -1=unchecked, 0=not available, 1=available */
+static int g_fm_installed, g_fm_switching;
+static char g_fm_provider[48] = "-";
+static char g_fm_nettype[16] = "-";
+static char g_fm_band[16] = "-";
+static char g_fm_signal[8] = "-";
+static char g_fm_mcc[8] = "-";
+static char g_fm_mnc[8] = "-";
+static char g_fm_pin[8] = "-";
+static int g_traffic_installed;
+static char g_tr_day_rx[24] = "-", g_tr_day_tx[24] = "-";
+static char g_tr_mon_rx[24] = "-", g_tr_mon_tx[24] = "-";
+static char g_tr_limit[24] = "不限";
+static int  g_tr_pct;
+static int  g_tr_alert;
 
 static const char *cpu_ctl_path(void)
 {
@@ -1133,20 +1152,6 @@ static void plugin_action_note(const char *path, const char *text)
     fclose(fp);
 }
 
-/* Check whether the KANO /api/run_shell endpoint is reachable.
- * Used to gate the FMSimPIN SIM-switch page: it only appears when this
- * API is available (i.e. the FMSimPIN browser plugin is installed). */
-static void fmsimpin_check_api(void)
-{
-    if (g_fmsimpin_available >= 0) return;  /* already checked */
-    /* Send a trivial safe command and check for HTTP 200. */
-    int rc = system("/usr/bin/wget -q --spider --timeout=3 "
-                    "'http://127.0.0.1/api/run_shell' >/dev/null 2>&1");
-    /* wget returns 0 on success (HTTP 200/3xx).  If the endpoint doesn't
-     * exist the ZTE web server returns 404 and wget exits non-zero. */
-    g_fmsimpin_available = (rc == 0) ? 1 : 0;
-}
-
 static void plugin_action_submit(const char *log_path, const char *runner,
                                  const char *ctl, const char *verb, const char *label)
 {
@@ -1172,9 +1177,10 @@ static int plugin_status_page(const char *path)
                     strstr(path, "/functions/mihomo.html") ||
                     strstr(path, "/functions/cpu-performance.html") ||
                     strstr(path, "/functions/wireguard.html") ||
-                    strstr(path, "/functions/operator-lock.html"));
+                    strstr(path, "/functions/operator-lock.html") ||
+                    strstr(path, "/functions/fmswitch.html") ||
+                    strstr(path, "/functions/traffic.html"));
 }
-
 static int plugin_page_named(const char *path, const char *name)
 {
     char needle[96];
@@ -1525,6 +1531,64 @@ static void refresh_operator_status(void)
     operator_scan_load(path);
 }
 
+static void refresh_fmswitch_status(void)
+{
+    const struct plugin_candidate *p = plugin_script_select(g_fm_candidates, ARRAY_LEN(g_fm_candidates), 0);
+    FILE *fp;
+    char line[512], cmd[512];
+
+    g_fm_installed = 0;
+    g_fm_switching = 0;
+    snprintf(g_fm_provider, sizeof g_fm_provider, "-");
+    snprintf(g_fm_nettype, sizeof g_fm_nettype, "-");
+    snprintf(g_fm_band, sizeof g_fm_band, "-");
+    snprintf(g_fm_signal, sizeof g_fm_signal, "-");
+    snprintf(g_fm_mcc, sizeof g_fm_mcc, "-");
+    snprintf(g_fm_mnc, sizeof g_fm_mnc, "-");
+    snprintf(g_fm_pin, sizeof g_fm_pin, "-");
+    if (!p) return;
+    g_fm_installed = 1;
+    snprintf(cmd, sizeof cmd, "sh '%s' status 2>/dev/null", p->ctl);
+    fp = popen(cmd, "r");
+    if (fp) {
+        while (fgets(line, sizeof line, fp)) {
+            if      (!strncmp(line, "FM_INSTALLED=", 13)) g_fm_installed = atoi(line + 13);
+            else if (!strncmp(line, "FM_PROVIDER=", 12)) line_value(g_fm_provider, sizeof g_fm_provider, line, 12);
+            else if (!strncmp(line, "FM_NETTYPE=", 11)) line_value(g_fm_nettype, sizeof g_fm_nettype, line, 11);
+            else if (!strncmp(line, "FM_BAND=", 8)) line_value(g_fm_band, sizeof g_fm_band, line, 8);
+            else if (!strncmp(line, "FM_SIGNAL=", 10)) line_value(g_fm_signal, sizeof g_fm_signal, line, 10);
+            else if (!strncmp(line, "FM_MCC=", 7)) line_value(g_fm_mcc, sizeof g_fm_mcc, line, 7);
+            else if (!strncmp(line, "FM_MNC=", 7)) line_value(g_fm_mnc, sizeof g_fm_mnc, line, 7);
+            else if (!strncmp(line, "FM_CUR_PIN=", 11)) line_value(g_fm_pin, sizeof g_fm_pin, line, 11);
+            else if (!strncmp(line, "FM_SWITCHING=", 13)) g_fm_switching = atoi(line + 13);
+        }
+        pclose(fp);
+    }
+    if (access("/tmp/fmswitch.pid", F_OK) == 0) g_fm_switching = 1;
+}
+static void refresh_traffic_status(void)
+{
+    FILE *fp;
+    char line[512], cmd[512];
+
+    g_traffic_installed = access(TRAFFIC_CTL, R_OK) == 0;
+    if (!g_traffic_installed) return;
+
+    snprintf(cmd, sizeof cmd, "sh '%s' status 2>/dev/null", TRAFFIC_CTL);
+    fp = popen(cmd, "r");
+    if (!fp) return;
+
+    while (fgets(line, sizeof line, fp)) {
+        if      (!strncmp(line, "TR_DAY_RX=", 10)) line_value(g_tr_day_rx, sizeof g_tr_day_rx, line, 10);
+        else if (!strncmp(line, "TR_DAY_TX=", 10)) line_value(g_tr_day_tx, sizeof g_tr_day_tx, line, 10);
+        else if (!strncmp(line, "TR_MON_RX=", 10)) line_value(g_tr_mon_rx, sizeof g_tr_mon_rx, line, 10);
+        else if (!strncmp(line, "TR_MON_TX=", 10)) line_value(g_tr_mon_tx, sizeof g_tr_mon_tx, line, 10);
+        else if (!strncmp(line, "TR_LIMIT=", 9))  line_value(g_tr_limit, sizeof g_tr_limit, line, 9);
+        else if (!strncmp(line, "TR_PCT=", 7))    g_tr_pct = atoi(line + 7);
+        else if (!strncmp(line, "TR_ALERT=", 9))  g_tr_alert = atoi(line + 9);
+    }
+    pclose(fp);
+}
 static void plugin_status_refresh(const char *path, int force)
 {
     uint32_t now = millis();
@@ -1532,15 +1596,15 @@ static void plugin_status_refresh(const char *path, int force)
 
     if (!plugin_status_page(path)) return;
     if (!force && g_plugin_status_at && now - g_plugin_status_at < interval) return;
-        }
     g_plugin_status_at = now;
     if (plugin_page_named(path, "tailscale.html")) refresh_tailscale_status();
     else if (plugin_page_named(path, "clash.html") || plugin_page_named(path, "mihomo.html")) refresh_mihomo_status();
     else if (plugin_page_named(path, "cpu-performance.html")) refresh_cpu_status();
     else if (plugin_page_named(path, "wireguard.html")) refresh_wireguard_status();
     else if (plugin_page_named(path, "operator-lock.html")) refresh_operator_status();
+    else if (plugin_page_named(path, "fmswitch.html")) refresh_fmswitch_status();
+        else if (plugin_page_named(path, "traffic.html")) refresh_traffic_status();
 }
-
 /* ---- screen lock (PIN) persistence. The PIN lives in a dotfile under the UI
  * dir (which always exists) so it survives reboots and isn't clobbered by
  * pushing the .html pages. lock_enabled() == "a PIN is set". ---- */
@@ -2013,15 +2077,11 @@ static int function_control_api_available(const char *name)
         return plugin_complete_select(g_wg_candidates, ARRAY_LEN(g_wg_candidates)) != NULL;
     if (!strcmp(name, "operator-lock.html"))
         return operator_complete_select() != NULL;
-    if (!strcmp(name, "fmsimpin.html"))
-        return g_fmsimpin_available > 0;
     return 1;
 }
 
 static int subpage_open(const char *name)
 {
-    if (!strcmp(name, "fmsimpin.html"))
-        fmsimpin_check_api();
     char path[300];
     if (!subpage_name_ok(name)) return 0;
     snprintf(path, sizeof path, "%s/subpages/%s", UI_DIR, name);
@@ -2172,6 +2232,7 @@ static const char *custom_function_tiles_html(void)
         else if (!strcmp(names[i], "cpu-performance.html")) desc = "频率策略与温控状态";
         else if (!strcmp(names[i], "wireguard.html")) desc = "隧道状态与 Peer";
         else if (!strcmp(names[i], "operator-lock.html")) desc = "扫描并锁定运营商";
+        else if (!strcmp(names[i], "fmswitch.html")) desc = "飞猫分身一键切卡";
         o += snprintf(buf + o, sizeof buf - o,
                       "<a href=\"act:func:%s\" class=\"func-tile func-custom\">"
                       "<span class=\"func-name\">%s</span>"
@@ -5653,7 +5714,7 @@ static int build_kv(struct kv *t, const char *path)
     /* ---- band lock: universe grows to the largest set seen; selection mirrors
      * the live lock unless the user is editing in the modal ---- */
     static char s_netseg[640], s_simswitch[1200], s_cursa[300], s_curnsa[300], s_curlte[300], s_toast[120];
-    static char s_ts_action_log[2200], s_mh_action_log[2200], s_cpu_action_log[2200], s_fm_action_log[2200];
+    static char s_ts_action_log[2200], s_mh_action_log[2200], s_cpu_action_log[2200];
     static char s_wg_action_log[2200], s_op_action_log[2200];
     static char s_wg_peers[24], s_wg_active[24], s_op_selected[16], s_op_job[440];
     static char s_wg_iface[80], s_wg_address[220], s_wg_port[48], s_wg_mode[64];
@@ -6056,8 +6117,102 @@ static int build_kv(struct kv *t, const char *path)
     t[i++] = (struct kv){ "OPCANCELCLASS", g_op_job_running ? "" : "disabled" };
     plugin_action_log_html(s_op_action_log, sizeof s_op_action_log, OPERATOR_ACTION_LOG);
     t[i++] = (struct kv){ "OPACTIONLOG", s_op_action_log };
-    plugin_action_log_html(s_fm_action_log, sizeof s_fm_action_log, FMSIMPIN_ACTION_LOG);
-    t[i++] = (struct kv){ "FMSIMACTIONLOG", s_fm_action_log };
+	    /* ========== 新增：读取切卡结果 Toast ========== */
+    char s_fm_toast[1024] = "";
+    char toast_type[16] = "";
+    char toast_title[64] = "";
+    char toast_msg[128] = "";
+    
+    FILE *fp = fopen("/tmp/fmswitch_result", "r");
+    if (fp) {
+        char line[256];
+        while (fgets(line, sizeof(line), fp)) {
+            size_t len = strlen(line);
+            if (len > 0 && line[len-1] == '\n') line[len-1] = '\0';
+            
+            if (strncmp(line, "FMTOAST_TYPE=", 13) == 0) {
+                strncpy(toast_type, line + 13, sizeof(toast_type) - 1);
+            } else if (strncmp(line, "FMTOAST_TITLE=", 14) == 0) {
+                strncpy(toast_title, line + 14, sizeof(toast_title) - 1);
+            } else if (strncmp(line, "FMTOAST_MSG=", 12) == 0) {
+                strncpy(toast_msg, line + 12, sizeof(toast_msg) - 1);
+            }
+        }
+        fclose(fp);
+        unlink("/tmp/fmswitch_result");  /* 读取后删除，避免重复显示 */
+    }
+    
+    if (toast_type[0]) {
+        const char *icon = !strcmp(toast_type, "success") ? "✓" :
+                           !strcmp(toast_type, "error") ? "✗" :
+                           !strcmp(toast_type, "warn") ? "⚠" : "ℹ";
+        
+        snprintf(s_fm_toast, sizeof s_fm_toast,
+            "<div class=\"toast-mask\">"
+            "<div class=\"toast-box toast %s\">"
+            "<div class=\"toast-icon\">%s</div>"
+            "<div class=\"toast-title\">%s</div>"
+            "<div class=\"toast-desc\">%s</div>"
+            "</div></div>",
+            toast_type, icon, toast_title, toast_msg);
+    }
+    /* ---- 飞猫分身切卡状态 ---- */
+    static char s_fm_progress[512], s_fm_log[2200], s_fm_state[32], s_fm_state_cls[16];
+    if (g_fm_switching) {
+        snprintf(s_fm_state, sizeof s_fm_state, "切换中");
+        snprintf(s_fm_state_cls, sizeof s_fm_state_cls, "warn");
+        snprintf(s_fm_progress, sizeof s_fm_progress,
+                 "<div class='card progress-card'><div class='title'>切卡进度 <span class='r muted'>请稍候</span></div>"
+                 "<div class='progress-bar'><div class='progress-fill'></div></div></div>");
+    } else {
+        snprintf(s_fm_state, sizeof s_fm_state, "%s", g_fm_installed ? "已就绪" : "未安装");
+        snprintf(s_fm_state_cls, sizeof s_fm_state_cls, "%s", g_fm_installed ? "ok" : "muted");
+        s_fm_progress[0] = 0;
+    }
+    plugin_action_log_html(s_fm_log, sizeof s_fm_log, FMSWITCH_ACTION_LOG);
+    t[i++] = (struct kv){ "FMSTATE", s_fm_state };
+    t[i++] = (struct kv){ "FMSTATECLASS", s_fm_state_cls };
+    t[i++] = (struct kv){ "FMOPERATOR", g_fm_provider };
+    t[i++] = (struct kv){ "FMNETTYPE", g_fm_nettype };
+    t[i++] = (struct kv){ "FMBAND", g_fm_band };
+    t[i++] = (struct kv){ "FMSIGNAL", g_fm_signal };
+    t[i++] = (struct kv){ "FMMCC", g_fm_mcc };
+    t[i++] = (struct kv){ "FMMNC", g_fm_mnc };
+    t[i++] = (struct kv){ "FMSLOT0100CLS", !strcmp(g_fm_pin, "0100") ? "active" : "" };
+    t[i++] = (struct kv){ "FMSLOT0200CLS", !strcmp(g_fm_pin, "0200") ? "active" : "" };
+    t[i++] = (struct kv){ "FMSLOT0300CLS", !strcmp(g_fm_pin, "0300") ? "active" : "" };
+    t[i++] = (struct kv){ "FMCURRNETCLS", g_fm_pin[0] ? "net-current" : "" };
+    t[i++] = (struct kv){ "FMPROGRESS", s_fm_progress };
+    t[i++] = (struct kv){ "FMLOG", s_fm_log };
+    t[i++] = (struct kv){ "FMCURPIN", g_fm_pin };
+    t[i++] = (struct kv){ "FMCURRNETCLS", g_fm_pin[0] ? "net-current" : "" };
+	t[i++] = (struct kv){ "FMTOAST", s_fm_toast };
+	    t[i++] = (struct kv){ "FMLOG", s_fm_log };
+
+    /* ---- traffic plugin tokens ---- */
+    static char s_tr_day_rx[24], s_tr_day_tx[24], s_tr_mon_rx[24], s_tr_mon_tx[24];
+    static char s_tr_limit[24], s_tr_pct[8], s_tr_alert_cls[16];
+    static char s_tr_alert_state[16], s_tr_action_log[2200];
+
+    snprintf(s_tr_day_rx, sizeof s_tr_day_rx, "%s", g_tr_day_rx);
+    snprintf(s_tr_day_tx, sizeof s_tr_day_tx, "%s", g_tr_day_tx);
+    snprintf(s_tr_mon_rx, sizeof s_tr_mon_rx, "%s", g_tr_mon_rx);
+    snprintf(s_tr_mon_tx, sizeof s_tr_mon_tx, "%s", g_tr_mon_tx);
+    snprintf(s_tr_limit, sizeof s_tr_limit, "%s", g_tr_limit);
+    snprintf(s_tr_pct, sizeof s_tr_pct, "%d%%", g_tr_pct);
+    snprintf(s_tr_alert_cls, sizeof s_tr_alert_cls, "%s", g_tr_alert ? "on" : "off");
+    snprintf(s_tr_alert_state, sizeof s_tr_alert_state, "%s", g_tr_alert ? "已开启" : "已关闭");
+    plugin_action_log_html(s_tr_action_log, sizeof s_tr_action_log, TRAFFIC_ACTION_LOG);
+
+    t[i++] = (struct kv){ "TRDAYRX", s_tr_day_rx };
+    t[i++] = (struct kv){ "TRDAYTX", s_tr_day_tx };
+    t[i++] = (struct kv){ "TRMONRX", s_tr_mon_rx };
+    t[i++] = (struct kv){ "TRMONTX", s_tr_mon_tx };
+    t[i++] = (struct kv){ "TRLIMIT", s_tr_limit };
+    t[i++] = (struct kv){ "TRPCT", s_tr_pct };
+    t[i++] = (struct kv){ "TRALERTCLS", s_tr_alert_cls };
+    t[i++] = (struct kv){ "TRALERTSTATE", s_tr_alert_state };
+    t[i++] = (struct kv){ "TRAFFICLOG", s_tr_action_log };
     return i;
 }
 
@@ -6845,7 +7000,26 @@ static void handle_modal_tap(drm_disp_t *disp, int x, int y, uint32_t now,
         *need_render = 1;
     }
 }
-
+        else if (!strncmp(a, "traffic:", 8)) {
+            const char *sub = a + 8;
+            if (!strncmp(sub, "reset:", 6)) {
+                const char *what = sub + 6;
+                if (!strcmp(what, "day")) {
+                    plugin_action_submit(TRAFFIC_ACTION_LOG, "sh ", TRAFFIC_CTL, "reset day", "重置今日流量");
+                } else if (!strcmp(what, "month")) {
+                    plugin_action_submit(TRAFFIC_ACTION_LOG, "sh ", TRAFFIC_CTL, "reset month", "重置本月流量");
+                }
+            } else if (!strncmp(sub, "limit:", 6)) {
+                char cmd[64];
+                snprintf(cmd, sizeof cmd, "limit %s", sub + 6);
+                plugin_action_submit(TRAFFIC_ACTION_LOG, "sh ", TRAFFIC_CTL, cmd, "设置流量限额");
+            } else if (!strncmp(sub, "alert:", 6)) {
+                char cmd[64];
+                snprintf(cmd, sizeof cmd, "alert %s", sub + 6);
+                plugin_action_submit(TRAFFIC_ACTION_LOG, "sh ", TRAFFIC_CTL, cmd, "切换限额提醒");
+            }
+            need_render = 1;
+        }
 /* Draw the sliding segmented-control highlight box at the finger, over cached fb.
  * n = number of cells. */
 static void seg_box(drm_disp_t *d, int sx, int sy, int sw, int sh, int n, int fx)
@@ -7621,8 +7795,42 @@ queued_done:
                             }
                             last_act = now;
                             need_render = 1;
+                    }
+                    else if (strncmp(act, "act:fmswitch:", 13) == 0) {
+                        const char *pin = act + 13;
+                        char verb[64];
+                        const struct plugin_candidate *pc = plugin_script_select(g_fm_candidates, ARRAY_LEN(g_fm_candidates), 1);
+                        
+                        /* 已经是当前网络，直接提示 */
+                        if (g_fm_pin[0] && !strcmp(g_fm_pin, pin)) {
+                            snprintf(g_toast, sizeof g_toast, "当前已是%s",
+                                     !strcmp(pin, "0200") ? "中国移动" :
+                                     !strcmp(pin, "0300") ? "中国电信" :
+                                     !strcmp(pin, "0100") ? "中国联通" : "该网络");
+                            g_toast_until = now + 1800;
+                            need_render = 1;
+                        } else if (pc) {
+                            /* === 新增：切卡前即时提示 === */
+                            const char *target_name = 
+                                !strcmp(pin, "0200") ? "中国移动" :
+                                !strcmp(pin, "0300") ? "中国电信" :
+                                !strcmp(pin, "0100") ? "中国联通" : "目标网络";
+                            snprintf(g_toast, sizeof g_toast, "正在切换至%s...", target_name);
+                            g_toast_until = now + 3000;  /* 3秒，等待异步任务完成 */
+                            /* ============================ */
+                            
+                            plugin_action_note(FMSWITCH_ACTION_LOG, "开始切卡");
+                            snprintf(verb, sizeof verb, "switch %s", pin);
+                            plugin_action_submit(FMSWITCH_ACTION_LOG, "sh ", pc->ctl, verb, "切卡操作");
+                            need_render = 1;
+                        } else {
+                            snprintf(g_toast, sizeof g_toast, "飞猫分身插件未安装");
+                            g_toast_until = now + 1800;
+                            need_render = 1;
                         }
-                        else if (!strcmp(a, "backfunc")) {
+                        last_act = now;
+                    }
+                    else if (!strcmp(a, "backfunc")) {
                             subpage_close();
                             menu = 0;
                             g_modal = 0;
@@ -8087,31 +8295,6 @@ queued_done:
                             system("ubus call zte_nwinfo_api nwinfo_reset_band_cell_setting '{}' >/dev/null 2>&1 &");
                             snprintf(g_toast, sizeof g_toast, "锁频已恢复默认"); g_toast_until = now + 1600;
                             need_render = 1;   /* selection re-syncs from the live lock automatically */
-                        }
-                        else if (!strncmp(a, "simswitch:", 10)) {
-                            /* 飞猫分身卡切卡：委托 fmsimpin.sh 通过 /api/run_shell 执行 AT+CLCK */
-                            const char *pin = a + 10;
-                            /* 白名单：仅允许已知飞猫分身卡 PIN 码 */
-                            if (!strcmp(pin, "0200") || !strcmp(pin, "0100") || !strcmp(pin, "0300")) {
-                                char label[16];
-                                const char *at_cmd;
-                                if (!strcmp(pin, "0200"))      { snprintf(label, sizeof label, "切换移动"); at_cmd = "0200"; }
-                                else if (!strcmp(pin, "0100")) { snprintf(label, sizeof label, "切换联通"); at_cmd = "0100"; }
-                                else                           { snprintf(label, sizeof label, "切换电信"); at_cmd = "0300"; }
-                                /* The control script is bundled alongside the binary.  It
-                                 * calls /api/run_shell (the KANO/FMSimPIN plugin backend)
-                                 * to send AT commands rather than opening AT ports directly. */
-                                char ctl[300];
-                                snprintf(ctl, sizeof ctl, "%s/../fmsimpin.sh", UI_DIR);
-                                plugin_action_submit(FMSIMPIN_ACTION_LOG, "", ctl, at_cmd, label);
-                                snprintf(g_toast, sizeof g_toast, "%s已提交", label);
-                                g_plugin_status_at = 0;
-                            } else {
-                                snprintf(g_toast, sizeof g_toast, "不支持的PIN码");
-                            }
-                            g_toast_until = now + 1800;
-                            last_act = now;
-                            need_render = 1;
                         }
                     }
                 }
