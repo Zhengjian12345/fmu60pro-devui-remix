@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>流量管理</title>
+</head>
+<body>
+  <div class="card">
+    <div class="title">流量管理 <span class="r muted">实时统计</span></div>
+    <p class="func-note">监控蜂窝及 LAN 接口总流量，支持日/月限额与提醒。</p>
+  </div>
+
+  <div class="card">
+    <div class="title">当前速率</div>
+    <table>
+      <tr><td class="kv-l">下行</td><td class="val">{{RXSPEED}}</td></tr>
+      <tr><td class="kv-l">上行</td><td class="val">{{TXSPEED}}</td></tr>
+      <tr><td class="kv-l">总接收</td><td class="val">{{RXBYTES}}</td></tr>
+      <tr><td class="kv-l">总发送</td><td class="val">{{TXBYTES}}</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="title">今日流量</div>
+    <table>
+      <tr><td class="kv-l">下行</td><td class="val">{{TRDAYRX}}</td></tr>
+      <tr><td class="kv-l">上行</td><td class="val">{{TRDAYTX}}</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="title">本月流量</div>
+    <table>
+      <tr><td class="kv-l">下行</td><td class="val">{{TRMONRX}}</td></tr>
+      <tr><td class="kv-l">上行</td><td class="val">{{TRMONTX}}</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="title">限额与提醒 <span class="r {{TRALERTCLS}}">{{TRALERTSTATE}}</span></div>
+    <table>
+      <tr><td class="kv-l">月限额</td><td class="val">{{TRLIMIT}}</td></tr>
+      <tr><td class="kv-l">已用比例</td><td class="val">{{TRPCT}}</td></tr>
+    </table>
+    <div style="background:#2a3b4f;height:6px;border-radius:3px;margin:8px 0;">
+      <div style="background:#4f8fe8;height:6px;border-radius:3px;width:{{TRPCT}};"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="title">操作</div>
+    <div class="svc-grid">
+      <a href="act:traffic:reset:day" class="svc-btn">重置今日</a>
+      <a href="act:traffic:reset:month" class="svc-btn">重置本月</a>
+    </div>
+    <div class="svc-grid" style="margin-top:6px;">
+      <a href="act:traffic:limit:50" class="svc-btn">限额50G</a>
+      <a href="act:traffic:limit:100" class="svc-btn">限额100G</a>
+      <a href="act:traffic:limit:200" class="svc-btn">限额200G</a>
+      <a href="act:traffic:limit:0" class="svc-btn">不限</a>
+    </div>
+    <div class="svc-grid" style="margin-top:6px;">
+      <a href="act:traffic:alert:1" class="svc-btn {{TRALERTCLS}}">开启提醒</a>
+      <a href="act:traffic:alert:0" class="svc-btn {{TRALERTCLS}}">关闭提醒</a>
+    </div>
+    <p class="func-note">重置后当前周期统计归零，历史累计不受影响。</p>
+    <div class="svc-log">{{TRAFFICLOG}}</div>
+  </div>
+</body>
+</html>
